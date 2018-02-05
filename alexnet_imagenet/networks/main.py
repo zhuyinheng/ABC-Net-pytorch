@@ -13,24 +13,15 @@ import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
 import torchvision.transforms as transforms
+
 cwd = os.getcwd()
 sys.path.append(cwd + '/../')
 sys.path.append(cwd + '/networks/')
-sys.path.append(cwd)
-
-import model_list as model_list
-import util as util
-
-
-# set the seed
-torch.manual_seed(1)
-
-# torch.cuda.manual_seed(1)
+import networks.model_list as model_list
+import networks.util as util
 
 import datasets as datasets
-# from datasets import transforms
-# import datasets.transforms as transforms
-print(cwd)
+
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('--arch', '-a', metavar='ARCH', default='alexnet',
                     help='model architecture (default: alexnet)')
@@ -41,13 +32,12 @@ parser.add_argument('-j', '--workers', default=8, type=int, metavar='N',
                     help='number of data loading workers (default: 8)')
 parser.add_argument('-b', '--batch-size', default=256, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
-parser.add_argument('--base_number', default=2, type=int,
-                    metavar='N', help='base_number (default: 2)')
+parser.add_argument('--base_number', default=3, type=int,
+                    metavar='N', help='base_number (default: 3)')
 parser.add_argument('--epochs', default=50, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-
 parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--momentum', default=0.90, type=float, metavar='M',
@@ -62,7 +52,7 @@ parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     default=False, help='use pre-trained model')
-parser.add_argument('--cuda', dest='cuda', action='store_true',
+parser.add_argument('--nocuda', dest='nocuda', action='store_true',
                     help='running on no cuda')
 best_prec1 = 0
 
@@ -70,33 +60,38 @@ best_prec1 = 0
 bin_op = None
 
 # define optimizer
-optimizer=None
+optimizer = None
+
 
 def main():
     global args, best_prec1
     args = parser.parse_args()
 
-    if platform.system() =="Windows":
-        args.nocuda=True
+    if platform.system() == "Windows":
+        args.nocuda = True
     else:
         args.nocuda = False
 
     # create model
     if args.arch == 'alexnet':
-        model = model_list.alexnet(pretrained=args.pretrained,base_number=args.base_number)
+        model = model_list.alexnet(pretrained=args.pretrained, base_number=args.base_number)
         input_size = 227
     else:
         raise Exception('Model not supported yet')
 
     model.features = torch.nn.DataParallel(model.features)
-    if args.nocuda == False:
+    if not args.nocuda:
+        # set the seed
+        torch.manual_seed(1)
+        torch.cuda.manual_seed(1)
         model.cuda()
-
-    # define loss function (criterion) and optimizer
-    if args.nocuda == False:
+        # define loss function (criterion) and optimizer
         criterion = nn.CrossEntropyLoss().cuda()
+        # Set benchmark
+        cudnn.benchmark = True
     else:
         criterion = nn.CrossEntropyLoss()
+
     global optimizer
     optimizer = torch.optim.Adam(model.parameters(), args.lr,
                                  weight_decay=args.weight_decay)
@@ -108,7 +103,10 @@ def main():
                 m.weight.data = m.weight.data.normal_(0, 1.0 / c)
             elif isinstance(m, nn.BatchNorm2d):
                 m.weight.data = m.weight.data.zero_().add(1.0)
-
+    else:
+        for m in model.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.weight.data = m.weight.data.zero_().add(1.0)
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
@@ -125,9 +123,6 @@ def main():
             del checkpoint
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
-
-    if args.nocuda==False:
-        cudnn.benchmark = True
 
     # # Data loading code
 
@@ -155,24 +150,23 @@ def main():
         transforms.RandomResizedCrop(input_size),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(mean = [ 0.485, 0.456, 0.406 ],
-        					 std = [0.229, 0.224, 0.225]),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
     ])
     transform_val = transforms.Compose([
         transforms.Resize((256, 256)),
         transforms.CenterCrop(input_size),
         transforms.ToTensor(),
-        transforms.Normalize(mean = [ 0.485, 0.456, 0.406 ],
-        					 std = [0.229, 0.224, 0.225]),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
     ])
-
 
     traindir = os.path.join(args.data, 'ILSVRC2012_img_train')
     valdir = os.path.join(args.data, 'ILSVRC2012_img_val')
     train_dataset = datasets.ImageFolder(traindir, transform, mapfile=os.path.join(args.data, "ImageNet12_train.txt"))
     val_dataset = datasets.ImageFolder(valdir, transform_val, mapfile=os.path.join(args.data, "ImageNet12_val.txt"))
 
-    if args.nocuda==False:
+    if not args.nocuda:
         train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=args.batch_size, shuffle=False,
             num_workers=args.workers, pin_memory=True)
@@ -234,9 +228,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
-        if args.nocuda==False:
+        if not args.nocuda:
             target = target.cuda(async=True)
-        if args.nocuda == False:
             input_var = torch.autograd.Variable(input).cuda()
         else:
             input_var = torch.autograd.Variable(input)
@@ -285,7 +278,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 'arch': args.arch,
                 'state_dict': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
-            }, False,filename="checkpoint_every_100_batches.pth.tar")
+            }, False, filename="checkpoint_every_100_batches.pth.tar")
         gc.collect()
 
 
@@ -302,7 +295,7 @@ def validate(val_loader, model, criterion):
     bin_op.binarization()
     for i, (input, target) in enumerate(val_loader):
 
-        if args.nocuda == False:
+        if not args.nocuda:
             target = target.cuda(async=True)
             input_var = torch.autograd.Variable(input, volatile=True).cuda()
             target_var = torch.autograd.Variable(target, volatile=True)
