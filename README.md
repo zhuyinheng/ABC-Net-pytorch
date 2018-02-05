@@ -1,4 +1,4 @@
-# *UNDER CONSTRUCTION*ABC-Net-Pytorch
+# [*UNDER CONSTRUCTION*] ABC-Net-Pytorch
 
 ## TO-DO
 
